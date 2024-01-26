@@ -36,18 +36,7 @@
 #![no_std]
 
 use bilge::prelude::*;
-use embedded_hal::blocking::i2c;
-
-/// All possible errors in this crate
-#[derive(Debug)]
-pub enum Error<E> {
-    /// I²C bus error
-    I2C(E),
-    /// Invalid input data
-    InvalidInputData,
-    /// Unsupported device found
-    UnsupportedDevice,
-}
+use embedded_hal::i2c::I2c;
 
 /// I2C device address.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -209,15 +198,12 @@ pub struct Tmp117<I2C> {
     config: Configuration,
 }
 
-impl<I2C> Tmp117<I2C> {
+impl<I2C: I2c> Tmp117<I2C> {
     const CELSIUS_PER_BIT: f32 = 7.8125 / 1000.0;
     const TMP117: u16 = 0x0117;
 }
 
-impl<I2C, E> Tmp117<I2C>
-where
-    I2C: i2c::Write<Error = E>,
-{
+impl<I2C: I2c> Tmp117<I2C> {
     /// Create a new instance of TMP117 device with default address.
     pub fn new(i2c: I2C) -> Self {
         let address = Address::default();
@@ -244,96 +230,89 @@ where
     }
 
     /// Enable the sensor (default state).
-    pub fn enable(&mut self) -> Result<(), Error<E>> {
+    pub fn enable(&mut self) -> Result<(), I2C::Error> {
         self.config.set_mode(ConversionMode::Continuous);
-        let contents = u16::to_be_bytes(u16::from(self.config.clone()));
+        let contents = u16::to_be_bytes(u16::from(self.config));
         self.write_register(Register::CONFIGURATION, contents)
     }
 
     /// Disable the sensor.
-    pub fn disable(&mut self) -> Result<(), Error<E>> {
+    pub fn disable(&mut self) -> Result<(), I2C::Error> {
         self.config.set_mode(ConversionMode::Shutdown);
-        let contents = u16::to_be_bytes(u16::from(self.config.clone()));
+        let contents = u16::to_be_bytes(u16::from(self.config));
         self.write_register(Register::CONFIGURATION, contents)
     }
 
     /// Reset the sensor
-    pub fn reset(&mut self) -> Result<(), Error<E>> {
+    pub fn reset(&mut self) -> Result<(), I2C::Error> {
         self.config.set_soft_reset(true);
-        let contents = u16::to_be_bytes(u16::from(self.config.clone()));
+        let contents = u16::to_be_bytes(u16::from(self.config));
         self.config.set_soft_reset(false);
         self.write_register(Register::CONFIGURATION, contents)
     }
 
     /// Set Temperature High Limit
-    pub fn set_thigh_limit(&mut self, limit: f32) -> Result<(), Error<E>> {
+    pub fn set_thigh_limit(&mut self, limit: f32) -> Result<(), I2C::Error> {
         let temp = (limit / Self::CELSIUS_PER_BIT) as u16;
         let contents = u16::to_be_bytes(temp);
         self.write_register(Register::THIGH_LIMIT, contents)
     }
 
     /// Set Temperature Low Limit
-    pub fn set_tlow_limit(&mut self, limit: f32) -> Result<(), Error<E>> {
+    pub fn set_tlow_limit(&mut self, limit: f32) -> Result<(), I2C::Error> {
         let temp = (limit / Self::CELSIUS_PER_BIT) as u16;
         let contents = u16::to_be_bytes(temp);
         self.write_register(Register::TLOW_LIMIT, contents)
     }
 
-    fn write_register(&mut self, register: u8, contents: [u8; 2]) -> Result<(), Error<E>> {
+    fn write_register(&mut self, register: u8, contents: [u8; 2]) -> Result<(), I2C::Error> {
         let mut data = [0; 3];
 
         data[0] = register;
         data[1] = contents[0];
         data[2] = contents[1];
 
-        self.i2c.write(self.address.0, &data).map_err(Error::I2C)?;
-        Ok(())
+        self.i2c.write(self.address.0, &data)
     }
 }
 
-impl<I2C, E> Tmp117<I2C>
-where
-    I2C: i2c::WriteRead<Error = E>,
-{
+impl<I2C: I2c> Tmp117<I2C> {
     /// Identify a TMP117 device.
-    pub fn identify(i2c: I2C) -> Result<Self, Error<E>> {
+    pub fn identify(i2c: I2C) -> Option<Self> {
         let address = Address::default();
         let config = Configuration::default();
         Self::validate(i2c, address, config)
     }
 
     /// Identify a TMP117 device with given state of ADD0 pin.
-    pub fn identify_with_add0_connection(
-        i2c: I2C,
-        connection: Add0Connection,
-    ) -> Result<Self, Error<E>> {
+    pub fn identify_with_add0_connection(i2c: I2C, connection: Add0Connection) -> Option<Self> {
         let address = Address::from(connection);
         let config = Configuration::default();
         Self::validate(i2c, address, config)
     }
 
     /// Identify TMP117 device with given address.
-    pub fn identify_with_address(i2c: I2C, address: Address) -> Result<Self, Error<E>> {
+    pub fn identify_with_address(i2c: I2C, address: Address) -> Option<Self> {
         let config = Configuration::default();
         Self::validate(i2c, address, config)
     }
 
     /// Read Device ID Register
-    pub fn device_id(&mut self) -> Result<u16, Error<E>> {
+    pub fn device_id(&mut self) -> Result<u16, I2C::Error> {
         let bytes = self.read_register(Register::DEVICE_ID)?;
         let id = DeviceId::from(bytes);
         Ok(id.into())
     }
 
     /// Read temperature in Celsius
-    pub fn read_temperature(&mut self) -> Result<f32, Error<E>> {
+    pub fn read_temperature(&mut self) -> Result<f32, I2C::Error> {
         let bytes = self.read_register(Register::TEMP_RESULT)?;
         let temperature = (bytes as i16 as f32) * Self::CELSIUS_PER_BIT;
         Ok(temperature)
     }
 
     /// Read temperature limits
-    pub fn read_temperature_limits(&mut self) -> Result<(f32, f32), Error<E>> {
+    pub fn read_temperature_limits(&mut self) -> Result<(f32, f32), I2C::Error> {
         let mut bytes = self.read_register(Register::THIGH_LIMIT)?;
         let high = (bytes as i16 as f32) * Self::CELSIUS_PER_BIT;
         bytes = self.read_register(Register::TLOW_LIMIT)?;
@@ -342,21 +321,23 @@ where
         Ok((high, low))
     }
 
-    fn validate(i2c: I2C, address: Address, config: Configuration) -> Result<Self, Error<E>> {
+    fn validate(i2c: I2C, address: Address, config: Configuration) -> Option<Self> {
         let mut tmp = Self::build_instance(i2c, address, config);
-        let id = tmp.device_id()?;
-        if id != Self::TMP117 {
-            Err(Error::UnsupportedDevice)
+        if let Ok(id) = tmp.device_id() {
+            if id != Self::TMP117 {
+                None
+            } else {
+                Some(tmp)
+            }
         } else {
-            Ok(tmp)
+            None
         }
     }
 
-    fn read_register(&mut self, register: u8) -> Result<u16, Error<E>> {
+    fn read_register(&mut self, register: u8) -> Result<u16, I2C::Error> {
         let mut bytes = [0; 2];
         self.i2c
-            .write_read(self.address.0, &[register], &mut bytes)
-            .map_err(Error::I2C)?;
+            .write_read(self.address.0, &[register], &mut bytes)?;
         Ok(u16::from_be_bytes(bytes))
     }
 }
